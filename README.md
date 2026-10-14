@@ -1,6 +1,8 @@
 # Lending Hub
 
-Nền tảng tiếng Việt kết nối nhu cầu vốn của doanh nghiệp/cá nhân với banker và đối tác môi giới. Phiên bản trải nghiệm có backend, database bền vững, file upload riêng tư, quy trình đề xuất và tiến độ, thông báo, gói vay, quản trị và nhật ký hoạt động.
+Nền tảng tiếng Việt và tiếng Anh kết nối nhu cầu vốn của doanh nghiệp/cá nhân với banker và đối tác môi giới. Phiên bản trải nghiệm có backend, database bền vững, file upload riêng tư, quy trình đề xuất và tiến độ, thông báo, gói vay, quản trị và nhật ký hoạt động.
+
+Nút **VI / EN** chuyển ngôn ngữ và lưu lựa chọn trên trình duyệt. Xem [hướng dẫn ngôn ngữ và cập nhật Spaceship](docs/LANGUAGES.md).
 
 ## Chạy
 

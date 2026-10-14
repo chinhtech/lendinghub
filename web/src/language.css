@@ -1,0 +1,9 @@
+.language-switch{display:inline-flex;flex-shrink:0;border:1px solid #cad8d0;border-radius:7px;padding:3px;gap:2px;background:#fff}
+.language-switch button{border:0;border-radius:4px;background:transparent;color:#436257;padding:6px 8px;font-size:11px;font-weight:600;min-height:30px}
+.language-switch button[aria-pressed="true"]{background:#176b53;color:#fff}
+.modal-head .language-switch{margin-left:auto;margin-right:12px}
+html[lang="en"] .hero-copy h2{font-size:30px}
+html[lang="en"] .hero-card{min-height:280px;height:auto}
+@media(max-width:1100px){.topbar .demo-pill{display:none}}
+@media(max-width:680px){.topbar .breadcrumb strong{display:none}.topbar .account-picker select{max-width:125px}.topbar .top-actions{margin-left:auto}.language-switch button{padding:6px;font-size:10px}html[lang="en"] .hero-copy h2{font-size:23px}html[lang="en"] .hero-card{min-height:250px}.modal-head .language-switch{margin-right:5px}.modal-head{gap:8px}}
+@media(max-width:360px){.topbar .account-picker select{max-width:100px}}
