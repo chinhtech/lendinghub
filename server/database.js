@@ -20,6 +20,7 @@ export function createDatabase(path) {
     CREATE TABLE IF NOT EXISTS notifications(id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), loan_id TEXT, title TEXT NOT NULL, read INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS audit(id TEXT PRIMARY KEY, actor_id TEXT REFERENCES users(id), loan_id TEXT, action TEXT NOT NULL, detail TEXT NOT NULL, created_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS products(id TEXT PRIMARY KEY, banker_id TEXT NOT NULL REFERENCES users(id), title TEXT NOT NULL, borrower_type TEXT NOT NULL, rate REAL NOT NULL, max_amount INTEGER NOT NULL, term INTEGER NOT NULL, description TEXT NOT NULL, created_at TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS kyc_reviews(user_id TEXT PRIMARY KEY REFERENCES users(id), status TEXT NOT NULL, document_name TEXT, mime TEXT, size INTEGER, storage_name TEXT, reason TEXT, reviewed_by TEXT REFERENCES users(id), submitted_at TEXT, reviewed_at TEXT);
   `);
   return db;
 }

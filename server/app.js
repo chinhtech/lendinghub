@@ -21,6 +21,8 @@ export function createApp(db,{uploadDir,distDir=resolve('dist'),demoMode=true}={
   app.use('/api',rateLimit({windowMs:60000,limit:300,standardHeaders:true,legacyHeaders:false}));
   app.use(express.json({limit:'100kb'}));
   const auth=(req,res,next)=>{req.user=resolveIdentity(db,req); if(!req.user)return res.status(401).json({error:'Vui lòng chọn tài khoản trải nghiệm.'});next();};
+  const kycStatus=(userId)=>db.prepare('SELECT user_id,status,document_name,mime,size,reason,reviewed_by,submitted_at,reviewed_at FROM kyc_reviews WHERE user_id=?').get(userId)||{status:'not_submitted'};
+  const validFile=(file)=>{const b=file.buffer,m=file.mimetype;return m==='application/pdf'?b.subarray(0,5).toString()==='%PDF-':m==='image/png'?b.subarray(0,8).equals(Buffer.from([137,80,78,71,13,10])):m==='image/jpeg'&&b[0]===255&&b[1]===216&&b[2]===255;};
   const roles=(...allowed)=>(req,res,next)=>{if(!allowed.includes(req.user.role)) return res.status(403).json({error:'Tài khoản không có quyền thực hiện thao tác này.'});next();};
   const getLoan=(loanId)=>db.prepare('SELECT * FROM loans WHERE id=?').get(loanId)||fail(404,'Không tìm thấy hồ sơ.');
   const selected=(loan)=>loan.selected_proposal_id?db.prepare('SELECT * FROM proposals WHERE id=?').get(loan.selected_proposal_id):null;
@@ -51,6 +53,19 @@ export function createApp(db,{uploadDir,distDir=resolve('dist'),demoMode=true}={
   app.post('/api/demo/users',(req,res)=>{const {role}=z.object({role:z.enum(['COM','PER','BRO','BAR'])}).parse(req.body);res.status(201).json(transaction(db,()=>createUser(db,role)));});
   app.use('/api',auth);
   app.get('/api/me',(req,res)=>res.json({...req.user,mode:'demo'}));
+  app.get('/api/kyc/me',roles('COM','PER','BRO'),(req,res)=>res.json(kycStatus(req.user.id)));
+  const kycUpload=multer({storage:multer.memoryStorage(),limits:{fileSize:10*1024*1024,files:1},fileFilter:(req,file,cb)=>cb(null,['application/pdf','image/jpeg','image/png'].includes(file.mimetype))});
+  app.post('/api/kyc/me',roles('COM','PER','BRO'),kycUpload.single('file'),(req,res)=>{
+    if(!req.file||!validFile(req.file))fail(400,'Chỉ nhận PDF, JPG hoặc PNG hợp lệ, tối đa 10 MB.');
+    const current=kycStatus(req.user.id);if(current.status==='pending'||current.status==='approved')fail(409,'Yêu cầu KYC đang chờ duyệt hoặc đã được duyệt.');
+    const storageName=id(),name=req.file.originalname.replace(/[^\p{L}\p{N} ._()-]/gu,'_').slice(0,180);
+    mkdirSync(join(uploadDir,'kyc'),{recursive:true});writeFileSync(join(uploadDir,'kyc',storageName),req.file.buffer,{flag:'wx'});
+    transaction(db,()=>{db.prepare(`INSERT INTO kyc_reviews(user_id,status,document_name,mime,size,storage_name,reason,reviewed_by,submitted_at,reviewed_at) VALUES(?,?,?,?,?,?,NULL,NULL,?,NULL) ON CONFLICT(user_id) DO UPDATE SET status=excluded.status,document_name=excluded.document_name,mime=excluded.mime,size=excluded.size,storage_name=excluded.storage_name,reason=NULL,reviewed_by=NULL,submitted_at=excluded.submitted_at,reviewed_at=NULL`).run(req.user.id,'pending',name,req.file.mimetype,req.file.size,storageName,now());audit(db,req.user.id,null,'kyc_submitted');});
+    res.status(201).json(kycStatus(req.user.id));
+  });
+  app.get('/api/admin/kyc',roles('ADMIN'),(req,res)=>res.json(db.prepare('SELECT k.user_id,u.alias,u.role,k.status,k.document_name,k.size,k.reason,k.submitted_at,k.reviewed_at FROM kyc_reviews k JOIN users u ON u.id=k.user_id ORDER BY k.submitted_at DESC').all()));
+  app.get('/api/admin/kyc/:userId/document',roles('ADMIN'),(req,res)=>{const k=db.prepare('SELECT * FROM kyc_reviews WHERE user_id=?').get(req.params.userId)||fail(404,'Không tìm thấy yêu cầu KYC.');res.type(k.mime);res.set('Content-Disposition',`attachment; filename*=UTF-8''${encodeURIComponent(k.document_name)}`);res.sendFile(k.storage_name,{root:resolve(join(uploadDir,'kyc')),dotfiles:'allow'});});
+  app.post('/api/admin/kyc/:userId/review',roles('ADMIN'),(req,res)=>{const v=z.object({status:z.enum(['approved','rejected']),reason:z.string().trim().max(1000).default('')}).parse(req.body);if(v.status==='rejected'&&!v.reason)fail(400,'Cần nêu lý do từ chối.');const k=kycStatus(req.params.userId);if(k.status!=='pending')fail(409,'Yêu cầu KYC không ở trạng thái chờ duyệt.');transaction(db,()=>{db.prepare('UPDATE kyc_reviews SET status=?,reason=?,reviewed_by=?,reviewed_at=? WHERE user_id=?').run(v.status,v.reason,req.user.id,now(),req.params.userId);audit(db,req.user.id,null,'kyc_reviewed',`${v.status}: ${v.reason}`);notify(db,req.params.userId,null,v.status==='approved'?'KYC đã được duyệt. Bạn có thể tải tài liệu hồ sơ vay.':`KYC chưa được duyệt: ${v.reason}`);});res.json(kycStatus(req.params.userId));});
   app.get('/api/loans',(req,res)=>{const loans=db.prepare('SELECT * FROM loans ORDER BY created_at DESC').all().filter(l=>canRead(req.user,l));res.json(loans.map(l=>serialize(l,req.user)));});
   app.get('/api/loans/:id',(req,res)=>{const l=getLoan(req.params.id);if(!canRead(req.user,l))fail(403,'Không có quyền xem hồ sơ.');res.json(serialize(l,req.user,true));});
   app.post('/api/loans',roles('COM','PER','BRO'),(req,res)=>{
@@ -58,7 +73,7 @@ export function createApp(db,{uploadDir,distDir=resolve('dist'),demoMode=true}={
     const loanId=transaction(db,()=>{const loanId=id();const t=now();db.prepare('INSERT INTO loans VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NULL,?,?,?)').run(loanId,req.user.id,req.user.alias,v.borrower_type,v.title,v.amount,v.term,v.purpose,v.industry,v.location,v.revenue,v.collateral,v.description,JSON.stringify(v.private_data),'submitted',1,t,t);db.prepare('INSERT INTO progress VALUES(?,?,?,?,?,?)').run(id(),loanId,req.user.id,'submitted','Đã gửi hồ sơ và đồng ý chia sẻ dữ liệu với banker được chọn.',t);audit(db,req.user.id,loanId,'loan_created');return loanId;});res.status(201).json(serialize(getLoan(loanId),req.user,true));
   });
   const upload=multer({storage:multer.memoryStorage(),limits:{fileSize:10*1024*1024,files:1},fileFilter:(req,file,cb)=>cb(null,['application/pdf','image/jpeg','image/png'].includes(file.mimetype))});
-  app.post('/api/loans/:id/documents',roles('COM','PER','BRO'),(req,res,next)=>{const l=getLoan(req.params.id);owner(req,l);if(!['submitted','offers_received','selected','in_review'].includes(l.status))fail(409,'Hồ sơ không còn nhận tài liệu.');next();},upload.single('file'),(req,res)=>{
+  app.post('/api/loans/:id/documents',roles('COM','PER','BRO'),(req,res,next)=>{const l=getLoan(req.params.id);owner(req,l);if(kycStatus(req.user.id).status!=='approved')fail(403,'Cần được duyệt KYC trước khi tải tài liệu hồ sơ vay.');if(!['submitted','offers_received','selected','in_review'].includes(l.status))fail(409,'Hồ sơ không còn nhận tài liệu.');next();},upload.single('file'),(req,res)=>{
     const l=getLoan(req.params.id);if(!req.file)fail(400,'Chỉ hỗ trợ PDF, JPG và PNG, tối đa 10 MB.');
     if(db.prepare('SELECT count(*) AS n FROM documents WHERE loan_id=?').get(l.id).n>=12)fail(400,'Tối đa 12 tài liệu cho mỗi hồ sơ.');
     const b=req.file.buffer,m=req.file.mimetype;

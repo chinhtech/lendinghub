@@ -120,6 +120,8 @@ function App() {
     [error, setError] = useState(''),
     [toast, setToast] = useState(''),
     [admin, setAdmin] = useState(null),
+    [kyc, setKyc] = useState(null),
+    [kycQueue, setKycQueue] = useState([]),
     [mobile, setMobile] = useState(false),
     [showNotifications, setShowNotifications] = useState(false);
   const isBank = user?.role === 'BAR',
@@ -129,11 +131,11 @@ function App() {
     setTimeout(() => setToast(''), 4500);
   };
   async function refresh() {
-    const [l, p, n] = await Promise.all([api('/loans'), api('/products'), api('/notifications')]);
+    const [activeUser, l, p, n] = await Promise.all([api('/me'), api('/loans'), api('/products'), api('/notifications')]);
     setLoans(l);
     setProducts(p);
     setNotifications(n);
-    if (user?.role === 'ADMIN') setAdmin(await api('/admin'));
+    if (activeUser.role === 'ADMIN') {setAdmin(await api('/admin'));setKycQueue(await api('/admin/kyc'));setKyc(null);} else if (activeUser.role === 'BAR') {setKyc(null);setKycQueue([]);} else {setKyc(await api('/kyc/me'));setKycQueue([]);}
   }
   useEffect(() => {
     api('/demo/users').then(u => {
@@ -209,10 +211,15 @@ function App() {
     setFilter('all');
     setMobile(false);
   }
+  useEffect(() => {
+    document.body.dataset.workspaceView = view;
+    document.body.dataset.kycStatus = kyc?.status || 'not_submitted';
+    return () => { delete document.body.dataset.workspaceView; delete document.body.dataset.kycStatus; };
+  }, [view, kyc?.status]);
   const visible = loans.filter(l => (filter === 'all' || (filter === 'active' ? activeStates.includes(l.status) : l.status === filter)) && (type === 'all' || l.borrower_type === type) && (location === 'all' || l.location === location) && `${l.title} ${l.alias} ${l.industry} ${l.location} ${tr(l.industry)} ${tr(l.location)}`.toLowerCase().includes(query.toLowerCase())).sort((a, b) => sort === 'amount' ? b.amount - a.amount : new Date(b.created_at) - new Date(a.created_at));
   const total = loans.reduce((sum, l) => sum + l.amount, 0),
     active = loans.filter(l => activeStates.includes(l.status)).length;
-  const nav = [['overview', LayoutDashboard, 'Tổng quan'], ['loans', Files, isBank ? 'Khám phá hồ sơ' : 'Hồ sơ của tôi'], ['offers', Handshake, isBank ? 'Đề xuất của tôi' : 'Đề xuất tài trợ'], ['progress', Activity, 'Tiến độ xử lý'], ['products', Landmark, 'Gói vay'], ['wallet', Wallet, 'Cọc & phí dịch vụ'], ...(isAdmin ? [['admin', Settings, 'Quản trị hệ thống']] : [])];
+  const nav = [['overview', LayoutDashboard, 'Tổng quan'], ...(!isBank ? [['kyc', ShieldCheck, isAdmin ? 'Duyệt KYC' : 'Xác minh danh tính']] : []), ['loans', Files, isBank ? 'Khám phá hồ sơ' : 'Hồ sơ của tôi'], ['offers', Handshake, isBank ? 'Đề xuất của tôi' : 'Đề xuất tài trợ'], ['progress', Activity, 'Tiến độ xử lý'], ['products', Landmark, 'Gói vay'], ['wallet', Wallet, 'Cọc & phí dịch vụ'], ...(isAdmin ? [['admin', Settings, 'Quản trị hệ thống']] : [])];
   return <div className="app-shell">
   <aside className={`sidebar ${mobile ? 'open' : ''}`}><a className="brand" href="#" onClick={e => {
         e.preventDefault();
@@ -232,6 +239,8 @@ function App() {
               year: 'numeric'
             }))}</div>}</div>
   {loading ? <div className="loading"><LoaderCircle className="spin" />{tr("Đang tải không gian làm việc…")}</div> : <>
+  {user && !isBank && !isAdmin && <section className="panel kyc-panel"><div className="section-head"><div><h2>{tr('Xác minh danh tính (KYC)')}</h2><p>{tr('Gửi giấy tờ mẫu để quản trị kiểm tra thủ công trước khi tải tài liệu hồ sơ vay.')}</p></div><span className="soft-label">{tr(({not_submitted:'Chưa gửi',pending:'Chờ duyệt',approved:'Đã duyệt',rejected:'Cần gửi lại'})[kyc?.status||'not_submitted'])}</span></div>{kyc?.document_name && <p>{tr('Tài liệu đã gửi: ')}{kyc.document_name}</p>}{kyc?.status==='rejected' && <p role="alert">{tr('Lý do từ chối: ')}{kyc.reason}</p>}{(!kyc || ['not_submitted','rejected'].includes(kyc.status)) && <label className="upload-zone"><Upload size={23}/><strong>{tr('Chọn giấy tờ mẫu PDF, JPG hoặc PNG')}</strong><small>{tr('Tối đa 10 MB. Chỉ quản trị có thể tải tài liệu KYC.')}</small><input type="file" accept=".pdf,.jpg,.jpeg,.png" disabled={busy} onChange={e=>{const f=e.target.files[0];if(!f)return;const form=new FormData();form.append('file',f);action(()=>api('/kyc/me',{method:'POST',body:form}),'Đã gửi KYC, đang chờ quản trị duyệt.').catch(()=>{});e.target.value='';}}/></label>}</section>}
+  {isAdmin && <section className="panel kyc-panel"><div className="section-head"><div><h2>{tr('Duyệt KYC thủ công')}</h2><p>{tr('Chỉ sử dụng giấy tờ mẫu trong bản trải nghiệm.')}</p></div></div>{kycQueue.length ? kycQueue.map(k=><div className="kyc-row" key={k.user_id}><strong>{k.alias} · {tr(roles[k.role])}</strong><span>{tr(({pending:'Chờ duyệt',approved:'Đã duyệt',rejected:'Đã từ chối'})[k.status])}</span><span>{k.document_name}</span><button className="button small" onClick={async()=>{try{const r=await fetch(`/api/admin/kyc/${k.user_id}/document`,{headers:{'x-demo-user':localStorage.getItem('lending-user')}});if(!r.ok)throw Error('Không thể tải tài liệu KYC.');const url=URL.createObjectURL(await r.blob());const a=document.createElement('a');a.href=url;a.download=k.document_name;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}catch(e){setError(e.message);}}}>{tr('Tải giấy tờ')}</button>{k.status==='pending' && <><button className="button small primary" disabled={busy} onClick={()=>action(()=>api(`/admin/kyc/${k.user_id}/review`,{method:'POST',body:{status:'approved',reason:''}}),'Đã duyệt KYC.').catch(()=>{})}>{tr('Duyệt')}</button><button className="button small" disabled={busy} onClick={()=>{const reason=window.prompt(tr('Lý do từ chối KYC'));if(reason?.trim())action(()=>api(`/admin/kyc/${k.user_id}/review`,{method:'POST',body:{status:'rejected',reason:reason.trim()}}),'Đã gửi kết quả KYC.').catch(()=>{});}}>{tr('Từ chối')}</button></>}</div>) : <p>{tr('Chưa có yêu cầu KYC.')}</p>}</section>}
   {view === 'overview' && <><div className="hero-card"><div className="hero-copy"><span className="hero-tag"><span />{tr("NỀN TẢNG KẾT NỐI TÀI TRỢ")}</span><h2>{isBank ? <>{tr("Nguồn vốn đúng nơi.")}<br />{tr("Cơ hội đúng thời điểm.")}</> : <>{tr("Một hồ sơ.")}<br />{tr("Nhiều cơ hội tiếp cận vốn.")}</>}</h2><p>{tr(isBank ? 'Những hồ sơ doanh nghiệp được chuẩn bị rõ ràng.\nBạn chọn cơ hội phù hợp, chúng tôi kết nối hành trình.' : 'So sánh đề xuất minh bạch và chủ động lựa chọn\nđối tác phù hợp với kế hoạch của bạn.')}</p><button onClick={() => navigate('loans')}> {tr(isBank ? 'Khám phá hồ sơ' : 'Xem hồ sơ của tôi')}<ArrowUpRight size={17} /></button></div><div className="hero-art" aria-hidden="true"><div className="orbit orbit-one" /><div className="orbit orbit-two" /><div className="art-center"><span className="brand-mark"><span /><span /><span /></span></div><div className="art-chip chip-one"><Building2 size={17} />{tr("Doanh nghiệp")}</div><div className="art-chip chip-two"><Landmark size={17} />{tr("Đối tác ngân hàng")}</div><div className="art-note"><span><Check size={12} /></span>{tr("Kết nối minh bạch")}</div></div></div>
   <div className="stats-grid">{[[Files, 'Hồ sơ ' + (isBank ? 'khả dụng' : 'đã tạo'), loans.length, 'Hồ sơ trên không gian của bạn'], [Wallet, 'Tổng nhu cầu vốn', compact(total), 'Giá trị các hồ sơ hiện có'], [Handshake, isBank ? 'Đề xuất đã gửi' : 'Đề xuất nhận được', loans.reduce((s, l) => s + (isBank ? l.proposals.length : l.proposal_count), 0), 'Kết nối cùng đối tác'], [TrendingUp, 'Đang xử lý', active, 'Hồ sơ trong hành trình tài trợ']].map(([Icon, label, value, note], i) => <div className="stat" key={label}><div className="stat-top"><span>{tr(label)}</span><div className={`stat-icon tone-${i}`}><Icon size={18} /></div></div><strong>{tr(value)}</strong><small>{tr(note)}</small></div>)}</div></>}
   {['overview', 'loans'].includes(view) && <section className="panel loans-panel"><div className="section-head"><div><h2>{tr(view === 'overview' ? isBank ? 'Hồ sơ tìm kiếm tài trợ' : 'Hồ sơ của bạn' : isBank ? 'Khám phá hồ sơ' : 'Danh sách hồ sơ')}</h2><p>{tr(isBank ? 'Cơ hội kết nối từ doanh nghiệp và cá nhân trên nền tảng.' : 'Quản lý thông tin, đề xuất và tiến độ của từng hồ sơ.')}</p></div><span className="count-label">{tr(visible.length)}{tr(" hồ sơ")}</span></div><div className="list-tools"><div className="tabs">{[['all', 'Tất cả'], ['submitted', 'Mới đăng'], ['offers_received', 'Có đề xuất'], ['active', 'Đang xử lý']].map(([v, l]) => <button key={v} className={filter === v ? 'selected' : ''} onClick={() => setFilter(v)}>{tr(l)}{v === 'all' && <span>{tr(loans.length)}</span>}</button>)}</div><div className="search-filter"><div className="search-box"><Search size={17} /><input aria-label={tr("Tìm hồ sơ")} placeholder={tr("Tìm hồ sơ, ngành nghề…")} value={query} onChange={e => setQuery(e.target.value)} /></div><button className={`button small ${showFilters ? 'selected' : ''}`} onClick={() => setShowFilters(!showFilters)}><SlidersHorizontal size={16} />{tr("Bộ lọc")}</button></div></div>{showFilters && <div className="filters"><Field label={tr("Đối tượng")}><select value={type} onChange={e => setType(e.target.value)}><option value="all">{tr("Tất cả đối tượng")}</option><option value="COM">{tr("Doanh nghiệp")}</option><option value="PER">{tr("Cá nhân")}</option></select></Field><Field label={tr("Khu vực")}><select value={location} onChange={e => setLocation(e.target.value)}><option value="all">{tr("Tất cả khu vực")}</option>{[...new Set(loans.map(l => l.location))].map(v => <option key={v} value={v}>{tr(v)}</option>)}</select></Field><Field label={tr("Sắp xếp")}><select value={sort} onChange={e => setSort(e.target.value)}><option value="newest">{tr("Mới nhất")}</option><option value="amount">{tr("Nhu cầu vốn cao nhất")}</option></select></Field><button className="text-button" onClick={() => {
@@ -257,7 +266,7 @@ function App() {
   </>}
   <footer className="page-footer"><span>{tr("© ")}{tr(new Date().getFullYear())} Lending Hub</span><span>{tr("Nền tảng kết nối · Ngân hàng quyết định cấp tín dụng")}</span><span>{tr("Minh bạch. Chủ động. Đồng hành.")}</span></footer></main></div>
   {toast && <div className="toast" role="status"><CheckCircle2 size={19} />{tr(toast)}</div>}
-  {detail && <LoanDetail loan={detail} user={user} tab={tab} setTab={setTab} onClose={() => setDetail(null)} busy={busy} action={action} setModal={setModal} onError={setError} />}
+  {detail && <LoanDetail loan={detail} user={user} kyc={kyc} tab={tab} setTab={setTab} onClose={() => setDetail(null)} busy={busy} action={action} setModal={setModal} onError={setError} />}
   {modal && <WorkflowModal modal={modal} user={user} loan={detail} busy={busy} action={action} onClose={() => setModal(null)} onCreated={async l => {
       setModal(null);
       if (l) {
@@ -283,6 +292,7 @@ function OfferCard({
 function LoanDetail({
   loan: l,
   user,
+  kyc,
   tab,
   setTab,
   onClose,
